@@ -39,7 +39,7 @@
 
 
 
-static void exitmessage(const char *message) __attribute__((noreturn));
+//static void exitmessage(const char *message) __attribute__((noreturn));
 static void exitmessage(const char *message)
 {
   printf("%s\n", message);
@@ -276,7 +276,7 @@ static void usage(void)
     fprintf(stderr, "  yuv420p - output 3 files .Y,.U,.V\n");
     fprintf(stderr, "  rgb24   - output a .tga image\n");
     fprintf(stderr, "  bgr24   - output a .tga image\n");
-    fprintf(stderr, "  gray    - output a .pgm image\n");
+    fprintf(stderr, "  grey    - output a .pgm image\n");
     exit(1);
 }
 
