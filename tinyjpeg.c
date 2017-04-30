@@ -31,6 +31,12 @@
  *
  */
 
+/* 
+ * 2017.4.40 by astraywu
+ * It's modified to C99 by astraywu.
+ * 
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,7 +116,7 @@ static void print_next_16bytes(int offset, const unsigned char *stream)
 /* Global variable to return the last error found while deconding */
 static char error_string[256];
 
-static const unsigned char zigzag[64] =
+static const uint8_t zigzag[64] =
 {
    0,  1,  5,  6, 14, 15, 27, 28,
    2,  4,  7, 13, 16, 26, 29, 42,
@@ -124,29 +130,29 @@ static const unsigned char zigzag[64] =
 
 /* Set up the standard Huffman tables (cf. JPEG standard section K.3) */
 /* IMPORTANT: these are only valid for 8-bit data precision! */
-static const unsigned char bits_dc_luminance[17] =
+static const uint8_t bits_dc_luminance[17] =
 {
   0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0
 };
-static const unsigned char val_dc_luminance[] =
+static const uint8_t val_dc_luminance[] =
 {
   0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
 };
 
-static const unsigned char bits_dc_chrominance[17] =
+static const uint8_t bits_dc_chrominance[17] =
 {
   0, 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0
 };
-static const unsigned char val_dc_chrominance[] =
+static const uint8_t val_dc_chrominance[] =
 {
   0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
 };
 
-static const unsigned char bits_ac_luminance[17] =
+static const uint8_t bits_ac_luminance[17] =
 {
   0, 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7d
 };
-static const unsigned char val_ac_luminance[] =
+static const uint8_t val_ac_luminance[] =
 {
   0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12,
   0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07,
@@ -171,12 +177,12 @@ static const unsigned char val_ac_luminance[] =
   0xf9, 0xfa
 };
 
-static const unsigned char bits_ac_chrominance[17] =
+static const uint8_t bits_ac_chrominance[17] =
 {
   0, 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77
 };
 
-static const unsigned char val_ac_chrominance[] =
+static const uint8_t val_ac_chrominance[] =
 {
   0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21,
   0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71,
@@ -243,6 +249,10 @@ static const unsigned char val_ac_chrominance[] =
 }  while(0);
 
  /* Signed version !!!! */
+// 说明一下最后一个if
+// 因为存储到码流中的是对应的反码，不保留符号位，而根据范式霍夫曼规划一般是-31~-16:16~31这种类型的
+// 所以正数的最高位肯定是1，负数最高位肯定是0，所以负数肯定是满足x < ((1 << nbit) - 1)这种形式的
+// 所以可以等价于，if (((result >> (nbits_wanted - 1)) & 1) == 0，即直接取最高位判断是1还是0
 #define get_nbits(reservoir,nbits_in_reservoir,stream,nbits_wanted,result) do { \
    fill_nbits(reservoir,nbits_in_reservoir,stream,(nbits_wanted)); \
    result = ((reservoir)>>(nbits_in_reservoir-(nbits_wanted))); \
@@ -286,6 +296,8 @@ static void resync(struct jdec_private *priv);
  *
  * If the code is not present for any reason, -1 is return.
  */
+// 之所以用两张表是因为霍夫曼码是前缀码，当查找不存在的时候要继续往后查找，速度比较慢，这里通过两张表
+// 可以大大加快速度（短的码字）
 static int get_next_huffman_code(struct jdec_private *priv, struct huffman_table *huffman_table)
 {
 	int value, hcode;
@@ -307,7 +319,7 @@ static int get_next_huffman_code(struct jdec_private *priv, struct huffman_table
 		look_nbits(priv->reservoir, priv->nbits_in_reservoir, priv->stream, nbits, hcode);
 		slowtable = huffman_table->slowtable[extra_nbits];
 		/* Search if the code is in this array */
-		while (slowtable[0]) {
+		while (slowtable[0]) {	// 感觉这一块应该用hash table来实现，否则这样的遍历太慢了吧
 			if (slowtable[0] == hcode) {
 				skip_nbits(priv->reservoir, priv->nbits_in_reservoir, priv->stream, nbits);
 				return slowtable[1];
@@ -329,7 +341,6 @@ static int get_next_huffman_code(struct jdec_private *priv, struct huffman_table
  */
 static void process_Huffman_data_unit(struct jdec_private *priv, int component)
 {
-	unsigned char j;
 	unsigned int huff_code;
 	unsigned char size_val, count_0;
 
@@ -344,6 +355,7 @@ static void process_Huffman_data_unit(struct jdec_private *priv, int component)
 	huff_code = get_next_huffman_code(priv, c->DC_table);
 	//trace("+ %x\n", huff_code);
 	if (huff_code) {
+		// 这里的倒数第二个参数使用到了快速look table，所以不是size
 		get_nbits(priv->reservoir, priv->nbits_in_reservoir, priv->stream, huff_code, DCT[0]);
 		DCT[0] += c->previous_DC;
 		c->previous_DC = DCT[0];
@@ -352,7 +364,7 @@ static void process_Huffman_data_unit(struct jdec_private *priv, int component)
 	}
 
 	/* AC coefficient decoding */
-	j = 1;
+	int j = 1;
 	while (j < 64) {
 		huff_code = get_next_huffman_code(priv, c->AC_table);
 		//trace("- %x\n", huff_code);
@@ -376,7 +388,7 @@ static void process_Huffman_data_unit(struct jdec_private *priv, int component)
 		}
 	}
 
-	for (j = 0; j < 64; j++)
+	for (int j = 0; j < 64; j++)
 		c->DCT[j] = DCT[zigzag[j]];
 }
 
@@ -389,47 +401,51 @@ static void process_Huffman_data_unit(struct jdec_private *priv, int component)
  */
 static void build_huffman_table(const unsigned char *bits, const unsigned char *vals, struct huffman_table *table)
 {
-	unsigned int i, j, code, code_size, val, nbits;
-	unsigned char huffsize[HUFFMAN_BITS_SIZE + 1], *hz;
-	unsigned int huffcode[HUFFMAN_BITS_SIZE + 1], *hc;
-	int next_free_entry;
+	unsigned int val;
+	uint8_t huffsize[HUFFMAN_BITS_SIZE + 1];
+	unsigned int huffcode[HUFFMAN_BITS_SIZE + 1];
 
-	/*
-	 * Build a temp array
-	 *   huffsize[X] => numbers of bits to write vals[X]
-	 */
-	hz = huffsize;
-	for (i = 1; i <= 16; i++) {
-		for (j = 1; j <= bits[i]; j++)
-			*hz++ = i;
+	{
+		/*
+		 * Build a temp array
+		 *   huffsize[X] => numbers of bits to write vals[X]
+		 */
+		int k = 0;
+		for (int i = 0; i < 16; i++) {
+			for (int j = 0; j < bits[i]; j++) {
+				huffsize[k++] = (uint8_t)(i + 1);
+			}
+		}
+		huffsize[k] = 0;
 	}
-	*hz = 0;
 
 	memset(table->lookup, 0xff, sizeof(table->lookup));
-	for (i = 0; i < (16 - HUFFMAN_HASH_NBITS); i++)
+	for (int i = 0; i < (16 - HUFFMAN_HASH_NBITS); i++)
 		table->slowtable[i][0] = 0;
 
-	/* Build a temp array
-	 *   huffcode[X] => code used to write vals[X]
-	 */
-	code = 0;
-	hc = huffcode;
-	hz = huffsize;
-	nbits = *hz;
-	while (*hz) {
-		while (*hz == nbits) {
-			*hc++ = code++;
-			hz++;
+	{
+		/* Build a temp array
+		 *   huffcode[X] => code used to write vals[X]
+		 */
+		unsigned int code = 0;
+		uint8_t nbits = huffsize[0];
+		int k = 0;
+		while (huffsize[k]) {
+			while (huffsize[k] == nbits) {
+				huffcode[k++] = code++;
+			}
+			code <<= 1;
+			nbits++;
 		}
-		code <<= 1;
-		nbits++;
 	}
+
 
 	/*
 	 * Build the lookup table, and the slowtable if needed.
 	 */
-	next_free_entry = -1;
-	for (i = 0; huffsize[i]; i++) {
+	int code = 0;
+	uint8_t code_size = 0;
+	for (int i = 0; huffsize[i]; i++) {
 		val = vals[i];
 		code = huffcode[i];
 		code_size = huffsize[i];
@@ -442,6 +458,10 @@ static void build_huffman_table(const unsigned char *bits, const unsigned char *
 			 * Good: val can be put in the lookup table, so fill all value of this
 			 * column with value val
 			 */
+			// 将前缀码全部填充掉，例如7位的码字0101 110，填充0101 110 00到0101 110 11，代码这个范围内
+			// 查找时都是代码码字0101 110，所以当直接提取9个bit时0101 110 XX时，马上就可以得到对应该的码字
+			// 是0101 110，然后就知道长度是7个bit，最后两个XX不进行解码。避免了原来的huffman需要不断移位来查找
+			// 的弊端，对于短的码字一次查找到位。使用空间换时间，不错的想法
 			int repeat = 1UL << (HUFFMAN_HASH_NBITS - code_size);
 			code <<= HUFFMAN_HASH_NBITS - code_size;
 			while (repeat--)
@@ -1652,8 +1672,7 @@ static int parse_SOS(struct jdec_private *priv, const unsigned char *stream)
 
 static int parse_DHT(struct jdec_private *priv, const unsigned char *stream)
 {
-	unsigned int count, i;
-	unsigned char huff_bits[17];
+	unsigned char huff_bits[17];	// 应该是范式霍夫曼表的bit_len分为16组
 	int length, index;
 
 	length = be16_to_cpu(stream) - 2;
@@ -1666,17 +1685,17 @@ static int parse_DHT(struct jdec_private *priv, const unsigned char *stream)
 
 		/* We need to calculate the number of bytes 'vals' will takes */
 		huff_bits[0] = 0;
-		count = 0;
-		for (i = 1; i < 17; i++) {
+		int code_count = 0;
+		for (int i = 0; i < 16; i++) {
 			huff_bits[i] = *stream++;
-			count += huff_bits[i];
+			code_count += huff_bits[i];
 		}
 #if SANITY_CHECK
-		if (count >= HUFFMAN_BITS_SIZE)
+		if (code_count >= HUFFMAN_BITS_SIZE)
 			error("No more than %d bytes is allowed to describe a huffman table", HUFFMAN_BITS_SIZE);
 		if ((index & 0xf) >= HUFFMAN_TABLES)
 			error("No more than %d Huffman tables is supported (got %d)\n", HUFFMAN_TABLES, index & 0xf);
-		trace("Huffman table %s[%d] length=%d\n", (index & 0xf0) ? "AC" : "DC", index & 0xf, count);
+		trace("Huffman table %s[%d] length=%d\n", (index & 0xf0) ? "AC" : "DC", index & 0xf, code_count);
 #endif
 
 		if (index & 0xf0)
@@ -1686,8 +1705,8 @@ static int parse_DHT(struct jdec_private *priv, const unsigned char *stream)
 
 		length -= 1;
 		length -= 16;
-		length -= count;
-		stream += count;
+		length -= code_count;
+		stream += code_count;
 	}
 	trace("< DHT marker\n");
 	return 0;
